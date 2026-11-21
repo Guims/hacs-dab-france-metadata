@@ -30,3 +30,9 @@ Non testé sur HAOS. Les redirections vers HTTP et les flux dépourvus de métad
 - Dernier titre valide conservé côté serveur 90 secondes au maximum ; la carte peut avoir son propre délai d'affichage.
 - Icecast JSON conservé, reconnexion après 5 secondes. HTTPS et protection DNS maintenus.
 - Une connexion audio supplémentaire consomme de la bande passante. Pas de résolution des identifiants NRJ ni de garantie de titres pendant les publicités. Non testé sur HAOS.
+
+
+## v0.6.1
+- API JSON RadioKing prioritaire pour L'Onde Porteuse et Tsugi Radio (identifiants explicites, à confirmer en conditions HA).
+- Repli Icecast/ICY limité à 45 secondes par connexion ; suppression des logs de blocs vides et filtrage des codes alphanumériques simples.
+- Les autres stations conservent les méthodes existantes. Pas de couverture nationale API garantie ; Infomaniak exige des identifiants distincts. Pas de pochette ni de validation de fraîcheur API dans cette version.
