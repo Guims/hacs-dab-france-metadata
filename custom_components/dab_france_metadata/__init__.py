@@ -3,7 +3,7 @@ import asyncio
 import logging
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 import voluptuous as vol
@@ -50,7 +50,7 @@ async def async_setup(hass, config):
                 result = ""
                 for url in allowed[station][:2]:
                     try:
-                        result = await read_title(url)
+                        result = await asyncio.wait_for(read_title(url), timeout=10)
                     except Exception as err:
                         _LOGGER.debug('Metadata station %s: %s', station, type(err).__name__)
                         continue
@@ -97,13 +97,44 @@ async def read_title(url):
         address = None
     if address is not None and not address.is_global:
         return ""
+    label = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    _LOGGER.debug("Metadata probing %s", label)
     connector = aiohttp.TCPConnector(resolver=PublicResolver())
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=10), trust_env=False) as client:
+        status_url = urlunsplit((parts.scheme, parts.netloc, "/status-json.xsl", "", ""))
+        try:
+            async with client.get(status_url, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=3)) as response:
+                _LOGGER.debug("Icecast %s HTTP %s", label, response.status)
+                if response.status == 200:
+                    raw = await response.content.read(262145)
+                    # Read to EOF with a strict size ceiling.
+                    while len(raw) <= 262144 and not response.content.at_eof():
+                        chunk = await response.content.read(262145 - len(raw))
+                        if not chunk:
+                            break
+                        raw += chunk
+                    if len(raw) <= 262144:
+                        import json
+                        sources = json.loads(raw).get("icestats", {}).get("source", [])
+                        if isinstance(sources, dict):
+                            sources = [sources]
+                        for source in sources:
+                            if urlsplit(str(source.get("listenurl", ""))).path == parts.path:
+                                title = " — ".join(str(source.get(k) or "").strip() for k in ("artist", "title") if source.get(k))
+                                _LOGGER.debug("Icecast %s title=%r", label, title[:200])
+                                if any(ch.isalpha() for ch in title):
+                                    return title[:500]
+                        _LOGGER.debug("Icecast %s no usable matching title", label)
+        except Exception as err:
+            _LOGGER.debug("Icecast %s unavailable: %s", label, type(err).__name__)
         async with client.get(url, headers={"Icy-MetaData": "1"}, allow_redirects=False) as response:
+            _LOGGER.debug('ICY %s HTTP %s content-type=%r icy-metaint=%r', label, response.status, response.headers.get('Content-Type'), response.headers.get('icy-metaint'))
             if response.status != 200:
+                _LOGGER.debug('ICY %s rejected HTTP status (redirects disabled)', label)
                 return ""
             interval = int(response.headers.get("icy-metaint", "0"))
             if not 0 < interval <= 524288:
+                _LOGGER.debug("ICY %s missing or invalid metadata interval", label)
                 return ""
             for _ in range(3):
                 await response.content.readexactly(interval)
@@ -114,6 +145,8 @@ async def read_title(url):
                 except UnicodeDecodeError:
                     decoded = raw.decode("cp1252", errors="replace")
                 match = re.search(r"StreamTitle='(.*?)';", decoded, re.S)
+                _LOGGER.debug('ICY %s StreamTitle=%r metadata_bytes=%s', label, match.group(1)[:200] if match else None, size)
                 if match and any(ch.isalpha() for ch in match.group(1)):
                     return match.group(1).strip()[:500]
+                _LOGGER.debug("ICY %s rejected empty or nonalphabetic title", label)
     return ""
