@@ -3,7 +3,7 @@ import asyncio
 import logging
 import re
 import time
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, urljoin
 
 import aiohttp
 import voluptuous as vol
@@ -86,6 +86,30 @@ class PublicResolver(aiohttp.abc.AbstractResolver):
     async def close(self):
         pass
 
+async def checked_stream(client, url):
+    import ipaddress
+    for hop in range(4):
+        parts = urlsplit(url)
+        if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password:
+            raise ValueError('Unsafe redirect')
+        try:
+            ip = ipaddress.ip_address(parts.hostname)
+        except ValueError:
+            ip = None
+        if ip is not None and not ip.is_global:
+            raise ValueError('Non-public redirect')
+        response = await client.get(url, headers={'Icy-MetaData': '1'}, allow_redirects=False)
+        if response.status not in (301, 302, 303, 307, 308):
+            return response
+        location = response.headers.get('Location')
+        response.release()
+        if not location or hop == 3:
+            raise ValueError('Redirect limit or missing location')
+        url = urljoin(url, location)
+        target = urlsplit(url)
+        _LOGGER.debug('ICY redirect to %s', urlunsplit((target.scheme, target.hostname or '', target.path, '', '')))
+    raise ValueError('Redirect limit')
+
 async def read_title(url):
     import ipaddress
     parts = urlsplit(url)
@@ -127,16 +151,16 @@ async def read_title(url):
                         _LOGGER.debug("Icecast %s no usable matching title", label)
         except Exception as err:
             _LOGGER.debug("Icecast %s unavailable: %s", label, type(err).__name__)
-        async with client.get(url, headers={"Icy-MetaData": "1"}, allow_redirects=False) as response:
+        async with await checked_stream(client, url) as response:
             _LOGGER.debug('ICY %s HTTP %s content-type=%r icy-metaint=%r', label, response.status, response.headers.get('Content-Type'), response.headers.get('icy-metaint'))
             if response.status != 200:
-                _LOGGER.debug('ICY %s rejected HTTP status (redirects disabled)', label)
+                _LOGGER.debug('ICY %s rejected HTTP status', label)
                 return ""
             interval = int(response.headers.get("icy-metaint", "0"))
             if not 0 < interval <= 524288:
                 _LOGGER.debug("ICY %s missing or invalid metadata interval", label)
                 return ""
-            for _ in range(3):
+            for _ in range(8):
                 await response.content.readexactly(interval)
                 size = (await response.content.readexactly(1))[0] * 16
                 raw = await response.content.readexactly(size)
