@@ -1,6 +1,6 @@
 # DAB+ France Metadata
 
-Version 0.5.2 — expérimentale.
+Version 0.5.3 — expérimentale.
 
 Complément facultatif de [DAB+ France](https://github.com/Guims/hacs-dab-france). Récupération ICY côté serveur Home Assistant.
 
@@ -9,6 +9,8 @@ Complément facultatif de [DAB+ France](https://github.com/Guims/hacs-dab-france
 Ajouter ce dépôt personnalisé dans la catégorie Intégration, télécharger la branche main, redémarrer Home Assistant, puis Paramètres > Appareils et services > Ajouter une intégration > DAB+ France Metadata. Aucun YAML nécessaire. Carte DAB+ France v0.5.0 ou ultérieure requise.
 
 ## Changelog
+
+- 0.5.3 : recherche Icecast JSON côté serveur avant ICY, diagnostic HTTP, type de contenu, intervalle ICY et StreamTitle tronqué. URL journalisée sans query string. Redirections toujours désactivées ; budget de 10 secondes par flux. Non testé sur HAOS.
 
 - 0.5.2 : filtrage des titres sans lettres et diagnostics debug via le logger dab_france_metadata. Les identifiants propriétaires ne sont pas résolus.
 
