@@ -22,7 +22,37 @@ async def async_setup(hass, config):
     allowed = {}
     expires = 0
     lock = asyncio.Lock()
-    slots = asyncio.Semaphore(3)
+    workers = {}
+    leases = {}
+
+    async def watch(station, urls):
+        def publish(value):
+            if value:
+                cache[station] = (time.monotonic(), value)
+                _LOGGER.debug("Metadata available for %s: %r", station, value[:200])
+        try:
+            while time.monotonic() < leases.get(station, 0):
+                for url in urls[:2]:
+                    if time.monotonic() >= leases.get(station, 0):
+                        break
+                    try:
+                        await read_title(url, publish, lambda: leases.get(station, 0) > time.monotonic())
+                    except Exception as err:
+                        _LOGGER.debug("Metadata watcher %s: %s", station, type(err).__name__)
+                await asyncio.sleep(5)
+        finally:
+            workers.pop(station, None)
+            leases.pop(station, None)
+            cache.pop(station, None)
+            _LOGGER.debug("Metadata watcher closed: %s", station)
+
+    async def stop_watchers(event):
+        tasks = list(workers.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    hass.bus.async_listen_once("homeassistant_stop", stop_watchers)
 
     @websocket_api.websocket_command({vol.Required("type"): DOMAIN + "/title", vol.Required("station"): str})
     @websocket_api.async_response
@@ -40,26 +70,18 @@ async def async_setup(hass, config):
             if station not in allowed:
                 connection.send_error(msg["id"], "unknown_station", "Station inconnue")
                 return
-            # Never accept a caller-supplied URL. Restrict outbound connections to
-            # the public catalogue; disable redirects and reject private DNS results.
-            async with slots:
-                old = cache.get(station)
-                if old and time.monotonic() - old[0] < 25:
-                    connection.send_result(msg["id"], {"title": old[1]})
+            # Station IDs only; at most three shared background connections.
+            leases[station] = time.monotonic() + 65
+            if station not in workers:
+                if len(workers) >= 3:
+                    leases.pop(station, None)
+                    connection.send_result(msg["id"], {"title": ""})
                     return
-                result = ""
-                for url in allowed[station][:2]:
-                    try:
-                        result = await asyncio.wait_for(read_title(url), timeout=10)
-                    except Exception as err:
-                        _LOGGER.debug('Metadata station %s: %s', station, type(err).__name__)
-                        continue
-                    if result and any(ch.isalpha() for ch in result):
-                        _LOGGER.debug("Metadata available for %s", station)
-                        break
-                    result = ""
-                _LOGGER.debug("Metadata lookup %s: %s", station, bool(result))
-                cache[station] = (time.monotonic(), result)
+                workers[station] = hass.async_create_background_task(
+                    watch(station, allowed[station]), "dab_metadata_" + station)
+                _LOGGER.debug("Metadata watcher started: %s", station)
+            old = cache.get(station)
+            result = old[1] if old and time.monotonic() - old[0] < 90 else ""
             connection.send_result(msg["id"], {"title": result})
         except Exception:
             connection.send_error(msg["id"], "metadata_unavailable", "Métadonnées indisponibles")
@@ -110,7 +132,7 @@ async def checked_stream(client, url):
         _LOGGER.debug('ICY redirect to %s', urlunsplit((target.scheme, target.hostname or '', target.path, '', '')))
     raise ValueError('Redirect limit')
 
-async def read_title(url):
+async def read_title(url, publish, active):
     import ipaddress
     parts = urlsplit(url)
     if parts.scheme != "https" or parts.username or parts.password or not parts.hostname:
@@ -124,7 +146,7 @@ async def read_title(url):
     label = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
     _LOGGER.debug("Metadata probing %s", label)
     connector = aiohttp.TCPConnector(resolver=PublicResolver())
-    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=10), trust_env=False) as client:
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=None, connect=5, sock_read=8), trust_env=False) as client:
         status_url = urlunsplit((parts.scheme, parts.netloc, "/status-json.xsl", "", ""))
         try:
             async with client.get(status_url, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=3)) as response:
@@ -147,7 +169,8 @@ async def read_title(url):
                                 title = " — ".join(str(source.get(k) or "").strip() for k in ("artist", "title") if source.get(k))
                                 _LOGGER.debug("Icecast %s title=%r", label, title[:200])
                                 if any(ch.isalpha() for ch in title):
-                                    return title[:500]
+                                    publish(title[:500])
+                                    return
                         _LOGGER.debug("Icecast %s no usable matching title", label)
         except Exception as err:
             _LOGGER.debug("Icecast %s unavailable: %s", label, type(err).__name__)
@@ -160,7 +183,7 @@ async def read_title(url):
             if not 0 < interval <= 524288:
                 _LOGGER.debug("ICY %s missing or invalid metadata interval", label)
                 return ""
-            for _ in range(8):
+            while active():
                 await response.content.readexactly(interval)
                 size = (await response.content.readexactly(1))[0] * 16
                 raw = await response.content.readexactly(size)
@@ -171,6 +194,7 @@ async def read_title(url):
                 match = re.search(r"StreamTitle='(.*?)';", decoded, re.S)
                 _LOGGER.debug('ICY %s StreamTitle=%r metadata_bytes=%s', label, match.group(1)[:200] if match else None, size)
                 if match and any(ch.isalpha() for ch in match.group(1)):
-                    return match.group(1).strip()[:500]
-                _LOGGER.debug("ICY %s rejected empty or nonalphabetic title", label)
+                    publish(match.group(1).strip()[:500])
+                elif match and match.group(1).strip():
+                    _LOGGER.debug("ICY %s rejected nonalphabetic title", label)
     return ""
