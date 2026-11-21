@@ -25,7 +25,49 @@ def clean_title(value):
 # Explicit station slugs; no inferred numeric ID or arbitrary client URL.
 RADIOKING = {"onde-porteuse": "londeporteuse-paris", "tsugi-radio": "tsugi-radio"}
 
+# Known endpoint shape; station mapping remains experimental.
+RADIO_METADATA_IDS = {"france-inter": "franceinter", "france-musique": "francemusique", "fip": "fip"}
+_metadata_retry = {}
+
+async def central_title(station):
+    # Try explicit aliases, then the catalogue ID, never a caller-provided URL.
+    if time.monotonic() < _metadata_retry.get(station, 0):
+        return ""
+    from urllib.parse import urlencode
+    identifier = RADIO_METADATA_IDS.get(station, station)
+    if not re.fullmatch(r"[a-z0-9-]{1,100}", identifier):
+        return ""
+    url = "https://radio-metadata.fr/api?" + urlencode({"id": identifier})
+    try:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver()), timeout=aiohttp.ClientTimeout(total=6), trust_env=False) as client:
+            async with client.get(url, allow_redirects=False) as response:
+                if response.status != 200:
+                    _metadata_retry[station] = time.monotonic() + 900
+                    return ""
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    raw.extend(chunk)
+                    if len(raw) > 262144:
+                        return ""
+                import json
+                payload = json.loads(raw)
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if isinstance(data, dict):
+                    title = clean_title(data.get("title"))
+                    artist = clean_title(data.get("artist"))
+                    if title and artist:
+                        _LOGGER.debug("Radio-Metadata candidate %s", station)
+                        return f"{artist} — {title}"
+                _metadata_retry[station] = time.monotonic() + 300
+    except Exception as err:
+        _metadata_retry[station] = time.monotonic() + 300
+        _LOGGER.debug("Radio-Metadata %s: %s", station, type(err).__name__)
+    return ""
+
 async def provider_title(station):
+    central = await central_title(station)
+    if central:
+        return central
     slug = RADIOKING.get(station)
     if not slug:
         return ""
@@ -75,7 +117,7 @@ async def async_setup(hass, config):
                 api_title = await provider_title(station)
                 if api_title:
                     publish(api_title)
-                    await asyncio.sleep(25)
+                    await asyncio.sleep(60)
                     continue
                 for url in urls[:2]:
                     if time.monotonic() >= leases.get(station, 0):
@@ -116,7 +158,7 @@ async def async_setup(hass, config):
                 connection.send_error(msg["id"], "unknown_station", "Station inconnue")
                 return
             # Station IDs only; at most three shared background connections.
-            leases[station] = time.monotonic() + 65
+            leases[station] = time.monotonic() + 95
             if station not in workers:
                 if len(workers) >= 3:
                     leases.pop(station, None)
