@@ -1,5 +1,6 @@
 """Optional metadata integration."""
 import asyncio
+import logging
 import re
 import time
 from urllib.parse import urlsplit
@@ -10,6 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 DOMAIN = "dab_france_metadata"
+_LOGGER = logging.getLogger(__name__)
 CATALOG = "https://raw.githubusercontent.com/Guims/hacs-dab-france/main/catalog/stations.json"
 
 async def async_setup(hass, config):
@@ -49,10 +51,14 @@ async def async_setup(hass, config):
                 for url in allowed[station][:2]:
                     try:
                         result = await read_title(url)
-                    except Exception:
+                    except Exception as err:
+                        _LOGGER.debug('Metadata station %s: %s', station, type(err).__name__)
                         continue
-                    if result:
+                    if result and any(ch.isalpha() for ch in result):
+                        _LOGGER.debug("Metadata available for %s", station)
                         break
+                    result = ""
+                _LOGGER.debug("Metadata lookup %s: %s", station, bool(result))
                 cache[station] = (time.monotonic(), result)
             connection.send_result(msg["id"], {"title": result})
         except Exception:
@@ -108,6 +114,6 @@ async def read_title(url):
                 except UnicodeDecodeError:
                     decoded = raw.decode("cp1252", errors="replace")
                 match = re.search(r"StreamTitle='(.*?)';", decoded, re.S)
-                if match and match.group(1).strip():
+                if match and any(ch.isalpha() for ch in match.group(1)):
                     return match.group(1).strip()[:500]
     return ""
