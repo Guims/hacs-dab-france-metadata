@@ -36,3 +36,7 @@ Non testé sur HAOS. Les redirections vers HTTP et les flux dépourvus de métad
 - API JSON RadioKing prioritaire pour L'Onde Porteuse et Tsugi Radio (identifiants explicites, à confirmer en conditions HA).
 - Repli Icecast/ICY limité à 45 secondes par connexion ; suppression des logs de blocs vides et filtrage des codes alphanumériques simples.
 - Les autres stations conservent les méthodes existantes. Pas de couverture nationale API garantie ; Infomaniak exige des identifiants distincts. Pas de pochette ni de validation de fraîcheur API dans cette version.
+
+
+## v0.6.2 — Radio-Metadata.fr (expérimental)
+Priorité au service JSON Radio-Metadata.fr pour les stations du catalogue, puis RadioKing, Icecast et ICY. Requêtes uniquement pour les stations écoutées, intervalle de 60 s en cas de succès, temporisation de 5 à 15 min en cas d'échec. Alias France Inter, France Musique et FIP candidats ; correspondances restantes et fraîcheur non validées. L'API publique est citée sur https://community.roonlabs.com/t/live-radio-metadata-service-incl-bbc-radio-france-flac-and-more/189662?page=11 ; conditions d'intégration tierce à confirmer auprès de l'opérateur. Pas de pochettes affichées dans cette version. Version expérimentale non testée sous HA.
