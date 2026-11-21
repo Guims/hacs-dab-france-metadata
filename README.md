@@ -1,6 +1,6 @@
 # DAB+ France Metadata
 
-Version 0.5.4 — expérimentale.
+Version 0.6.0 — expérimentale.
 
 Complément facultatif de [DAB+ France](https://github.com/Guims/hacs-dab-france). Récupération ICY côté serveur Home Assistant.
 
@@ -22,3 +22,11 @@ Ajouter ce dépôt personnalisé dans la catégorie Intégration, télécharger 
 ## Limites
 
 Non testé sur HAOS. Les redirections vers HTTP et les flux dépourvus de métadonnées restent non pris en charge. Le module ne fournit pas encore les API propriétaires ni les pochettes. Un redémarrage est nécessaire pour désactiver complètement le service après suppression de l'intégration.
+
+
+## Version 0.6.0
+- Surveillance ICY en arrière-plan, partagée par station (3 stations simultanées maximum).
+- Bail de 65 secondes renouvelé par les requêtes de la carte ; arrêt après expiration ou arrêt de HA.
+- Dernier titre valide conservé côté serveur 90 secondes au maximum ; la carte peut avoir son propre délai d'affichage.
+- Icecast JSON conservé, reconnexion après 5 secondes. HTTPS et protection DNS maintenus.
+- Une connexion audio supplémentaire consomme de la bande passante. Pas de résolution des identifiants NRJ ni de garantie de titres pendant les publicités. Non testé sur HAOS.
