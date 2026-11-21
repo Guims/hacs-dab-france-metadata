@@ -1,7 +1,7 @@
 {
   "domain": "dab_france_metadata",
   "name": "DAB+ France Metadata",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "documentation": "https://github.com/Guims/hacs-dab-france-metadata",
   "codeowners": [
     "@Guims"
