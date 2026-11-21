@@ -14,6 +14,45 @@ DOMAIN = "dab_france_metadata"
 _LOGGER = logging.getLogger(__name__)
 CATALOG = "https://raw.githubusercontent.com/Guims/hacs-dab-france/main/catalog/stations.json"
 
+def clean_title(value):
+    title = str(value or "").strip()
+    if not any(ch.isalpha() for ch in title):
+        return ""
+    if re.fullmatch(r"[A-Z]{1,5}[-_]?\d+(?:\s*-\s*[A-Z]{1,5}[-_]?\d+)?", title, re.I):
+        return ""
+    return title[:500]
+
+# Explicit station slugs; no inferred numeric ID or arbitrary client URL.
+RADIOKING = {"onde-porteuse": "londeporteuse-paris", "tsugi-radio": "tsugi-radio"}
+
+async def provider_title(station):
+    slug = RADIOKING.get(station)
+    if not slug:
+        return ""
+    url = f"https://api.radioking.io/widget/radio/{slug}/track/current?format=json"
+    try:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver()), timeout=aiohttp.ClientTimeout(total=5), trust_env=False) as client:
+            async with client.get(url, allow_redirects=False) as response:
+                if response.status != 200:
+                    return ""
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    raw.extend(chunk)
+                    if len(raw) > 262144:
+                        return ""
+                import json
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    return ""
+                title = clean_title(data.get("title"))
+                artist = clean_title(data.get("artist"))
+                if title and artist and artist.casefold() not in title.casefold():
+                    title = f"{artist} — {title}"
+                return title
+    except Exception as err:
+        _LOGGER.debug("RadioKing %s: %s", station, type(err).__name__)
+        return ""
+
 async def async_setup(hass, config):
     if hass.data.get(DOMAIN):
         return True
@@ -27,16 +66,22 @@ async def async_setup(hass, config):
 
     async def watch(station, urls):
         def publish(value):
+            value = clean_title(value)
             if value:
                 cache[station] = (time.monotonic(), value)
                 _LOGGER.debug("Metadata available for %s: %r", station, value[:200])
         try:
             while time.monotonic() < leases.get(station, 0):
+                api_title = await provider_title(station)
+                if api_title:
+                    publish(api_title)
+                    await asyncio.sleep(25)
+                    continue
                 for url in urls[:2]:
                     if time.monotonic() >= leases.get(station, 0):
                         break
                     try:
-                        await read_title(url, publish, lambda: leases.get(station, 0) > time.monotonic())
+                        await asyncio.wait_for(read_title(url, publish, lambda: leases.get(station, 0) > time.monotonic()), timeout=45)
                     except Exception as err:
                         _LOGGER.debug("Metadata watcher %s: %s", station, type(err).__name__)
                 await asyncio.sleep(5)
@@ -168,7 +213,7 @@ async def read_title(url, publish, active):
                             if urlsplit(str(source.get("listenurl", ""))).path == parts.path:
                                 title = " — ".join(str(source.get(k) or "").strip() for k in ("artist", "title") if source.get(k))
                                 _LOGGER.debug("Icecast %s title=%r", label, title[:200])
-                                if any(ch.isalpha() for ch in title):
+                                if clean_title(title):
                                     publish(title[:500])
                                     return
                         _LOGGER.debug("Icecast %s no usable matching title", label)
@@ -192,9 +237,8 @@ async def read_title(url, publish, active):
                 except UnicodeDecodeError:
                     decoded = raw.decode("cp1252", errors="replace")
                 match = re.search(r"StreamTitle='(.*?)';", decoded, re.S)
-                _LOGGER.debug('ICY %s StreamTitle=%r metadata_bytes=%s', label, match.group(1)[:200] if match else None, size)
-                if match and any(ch.isalpha() for ch in match.group(1)):
-                    publish(match.group(1).strip()[:500])
+                if match and clean_title(match.group(1)):
+                    publish(clean_title(match.group(1)))
                 elif match and match.group(1).strip():
                     _LOGGER.debug("ICY %s rejected nonalphabetic title", label)
     return ""
