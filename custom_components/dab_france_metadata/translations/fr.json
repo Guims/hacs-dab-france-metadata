@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "DAB+ France Metadata",
+        "description": "Activer la récupération des titres côté serveur."
+      }
+    },
+    "abort": {
+      "already_configured": "Intégration déjà configurée."
+    }
+  }
+}
